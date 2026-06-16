@@ -48,6 +48,10 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      deployments: write
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.deploy.outputs.deployment-url }}
@@ -82,12 +86,16 @@ jobs:
       - name: Comment preview URL on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url || steps.deploy.outputs.pages-deployment-alias-url || '' }}
         with:
           script: |
-            const url = '${{ steps.deploy.outputs.deployment-url }}';
-            if (!url) return;
+            const url = process.env.DEPLOY_URL;
+            if (!url) {
+              console.log('No deployment URL found in outputs');
+              return;
+            }
             const body = `🚀 **Preview deployment ready**\n\n${url}`;
-            // Find existing bot comment to update instead of spamming
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
