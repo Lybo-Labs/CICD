@@ -1,11 +1,10 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Reusable workflow: Cloudflare Pages deploy
 # ──────────────────────────────────────────────────────────────────────────────
-# Place this file in the organization repo:
-#   lybo-labs/.github/.github/workflows/cloudflare-pages-deploy.yml
+# Lives in: Lybo-Labs/cicd/.github/workflows/cloudflare-pages-deploy.yml
 #
 # Caller repos invoke it with:
-#   uses: lybo-labs/.github/.github/workflows/cloudflare-pages-deploy.yml@main
+#   uses: Lybo-Labs/cicd/.github/workflows/cloudflare-pages-deploy.yml@main
 # ──────────────────────────────────────────────────────────────────────────────
 
 name: Cloudflare Pages Deploy
