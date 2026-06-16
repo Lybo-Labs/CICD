@@ -66,9 +66,9 @@ jobs:
 
       - name: Build
         run: ${{ inputs.build-command }}
-        # All PUBLIC_* vars from the GitHub Environment are automatically
-        # injected here. Add them in GitHub → Settings → Environments → <env> → Variables.
-        # Examples: PUBLIC_CLARITY_PROJECT_ID, PUBLIC_WEB3FORMS_KEY, etc.
+        env:
+          PUBLIC_CLARITY_PROJECT_ID: ${{ vars.PUBLIC_CLARITY_PROJECT_ID }}
+          PUBLIC_WEB3FORMS_KEY: ${{ vars.PUBLIC_WEB3FORMS_KEY }}
 
       - name: Deploy to Cloudflare Pages
         id: deploy
