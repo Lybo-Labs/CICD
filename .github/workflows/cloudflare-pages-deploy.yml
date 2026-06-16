@@ -1,0 +1,113 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: Cloudflare Pages deploy
+# ──────────────────────────────────────────────────────────────────────────────
+# Place this file in the organization repo:
+#   lybo-labs/.github/.github/workflows/cloudflare-pages-deploy.yml
+#
+# Caller repos invoke it with:
+#   uses: lybo-labs/.github/.github/workflows/cloudflare-pages-deploy.yml@main
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Cloudflare Pages Deploy
+
+on:
+  workflow_call:
+    inputs:
+      project-name:
+        description: 'Cloudflare Pages project name (as shown in CF dashboard)'
+        required: true
+        type: string
+      environment:
+        description: 'GitHub Environment to use (production | staging | development | preview)'
+        required: true
+        type: string
+      branch:
+        description: 'Branch name for the deployment (used by CF to assign aliases)'
+        required: true
+        type: string
+      node-version-file:
+        description: 'Path to .nvmrc or similar for node version'
+        required: false
+        type: string
+        default: '.nvmrc'
+      build-command:
+        description: 'Build command to run'
+        required: false
+        type: string
+        default: 'npm run build'
+      output-directory:
+        description: 'Directory with the build output to deploy'
+        required: false
+        type: string
+        default: 'dist'
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ${{ inputs.node-version-file }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ${{ inputs.build-command }}
+        # All PUBLIC_* vars from the GitHub Environment are automatically
+        # injected here. Add them in GitHub → Settings → Environments → <env> → Variables.
+        # Examples: PUBLIC_CLARITY_PROJECT_ID, PUBLIC_WEB3FORMS_KEY, etc.
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy ${{ inputs.output-directory }} --project-name=${{ inputs.project-name }} --branch=${{ inputs.branch }}
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.deployment-url }}';
+            if (!url) return;
+            const body = `🚀 **Preview deployment ready**\n\n${url}`;
+            // Find existing bot comment to update instead of spamming
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Preview deployment ready')
+            );
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
