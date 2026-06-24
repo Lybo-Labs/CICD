@@ -65,7 +65,11 @@ jobs:
             ./ ${{ inputs.deploy-dir }}/
 
       - name: Write .env file
+        shell: bash
         run: |
+          # URL-encode the password for safe use in DATABASE_URL
+          ENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${{ secrets.POSTGRES_PASSWORD }}', safe=''))")
+
           cat > ${{ inputs.deploy-dir }}/.env << EOF
           APP_ENV=${{ inputs.environment }}
           BACKEND_PORT=${{ inputs.port }}
@@ -74,6 +78,7 @@ jobs:
           POSTGRES_DB=${{ vars.POSTGRES_DB }}
           POSTGRES_PORT=${{ vars.POSTGRES_PORT }}
           ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
+          DATABASE_URL=postgresql://${{ vars.POSTGRES_USER }}:${ENCODED_PASS}@db:5432/${{ vars.POSTGRES_DB }}?schema=public
           EOF
           sed -i 's/^[[:space:]]*//' ${{ inputs.deploy-dir }}/.env
 
