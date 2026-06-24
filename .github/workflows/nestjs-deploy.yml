@@ -67,6 +67,7 @@ jobs:
       - name: Write .env file
         run: |
           echo '${{ secrets.ENV_FILE }}' > ${{ inputs.deploy-dir }}/.env
+          grep -q '^APP_ENV=' ${{ inputs.deploy-dir }}/.env || echo 'APP_ENV=${{ inputs.environment }}' >> ${{ inputs.deploy-dir }}/.env
 
       - name: Build and deploy containers
         working-directory: ${{ inputs.deploy-dir }}
