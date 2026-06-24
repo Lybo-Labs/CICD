@@ -1,0 +1,71 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: Release (release-please)
+# ──────────────────────────────────────────────────────────────────────────────
+# Lives in: Lybo-Labs/cicd/.github/workflows/release.yml
+#
+# Uses release-please with Conventional Commits:
+#   feat: ...  → minor bump (v1.1.0)
+#   fix: ...   → patch bump (v1.0.1)
+#   feat!: ... → major bump (v2.0.0)
+#
+# Flow:
+#   1. Merges to main trigger this workflow.
+#   2. release-please opens/updates a "Release PR" with changelog + version bump.
+#   3. When you merge that Release PR, it creates the git tag + GitHub Release.
+#   4. You then go to "Deploy (Manual)" and select that tag to deploy production.
+#
+# Caller repos invoke it with:
+#   uses: Lybo-Labs/cicd/.github/workflows/release.yml@main
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      release-type:
+        description: 'Release type for release-please (node, python, etc.)'
+        required: false
+        type: string
+        default: 'node'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          release-type: ${{ inputs.release-type }}
+
+      - name: Summary
+        env:
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_URL: ${{ steps.release.outputs.html_url }}
+          PRS_CREATED: ${{ steps.release.outputs.prs_created }}
+        run: |
+          if [[ "$RELEASE_CREATED" == "true" ]]; then
+            echo "## 🏷️ Release created" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Tag:** \`${TAG_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Version:** \`${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Release:** ${RELEASE_URL}" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Ready to deploy via **Deploy (Manual)** selecting tag \`${TAG_NAME}\`." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$PRS_CREATED" == "true" ]]; then
+            echo "## 📋 Release PR created/updated" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Merge the Release PR to create the tag and GitHub Release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ⏭️ No release needed" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No user-facing commits found since the last release." >> "$GITHUB_STEP_SUMMARY"
+            echo "Only \`feat:\`, \`fix:\`, or breaking changes trigger a new release." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,50 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: NestJS CI (Lint + Test + Build)
+# ──────────────────────────────────────────────────────────────────────────────
+# Lives in: Lybo-Labs/cicd/.github/workflows/nestjs-ci.yml
+#
+# Runs lint, unit tests, and build validation.
+# Used by PRs and as a gate before deploys.
+#
+# Caller repos invoke it with:
+#   uses: Lybo-Labs/cicd/.github/workflows/nestjs-ci.yml@main
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: NestJS CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+
+jobs:
+  ci:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build

@@ -1,0 +1,96 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: NestJS Backend Deploy (Docker Compose)
+# ──────────────────────────────────────────────────────────────────────────────
+# Lives in: Lybo-Labs/cicd/.github/workflows/nestjs-deploy.yml
+#
+# Strategy: Trunk-Based Development
+#   - PR to main → test + build validation (via nestjs-ci.yml)
+#   - Manual dispatch → deploy to development / staging / production
+#   - Production requires a tag (validated by caller)
+#
+# Deploys using Docker Compose on a self-hosted runner (lybo-onpremise).
+# The app is then exposed via Nginx Proxy Manager.
+#
+# Caller repos invoke it with:
+#   uses: Lybo-Labs/cicd/.github/workflows/nestjs-deploy.yml@main
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: NestJS Deploy
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: 'Application name (used for container and project naming)'
+        required: true
+        type: string
+      port:
+        description: 'Host port to expose the backend on'
+        required: false
+        type: string
+        default: '3000'
+      environment:
+        description: 'GitHub Environment (production | staging | development)'
+        required: true
+        type: string
+      deploy-dir:
+        description: 'Absolute path on the server where the app is deployed'
+        required: true
+        type: string
+    secrets:
+      ENV_FILE:
+        description: 'Contents of the .env file for the target environment'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p ${{ inputs.deploy-dir }}
+
+      - name: Sync project files
+        run: |
+          rsync -a --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'postgres-data' \
+            --exclude '.env' \
+            ./ ${{ inputs.deploy-dir }}/
+
+      - name: Write .env file
+        run: |
+          echo '${{ secrets.ENV_FILE }}' > ${{ inputs.deploy-dir }}/.env
+
+      - name: Build and deploy containers
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} down --remove-orphans || true
+          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} up -d --build
+
+      - name: Wait for healthy containers
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          echo "Waiting for containers to be healthy..."
+          timeout 60 bash -c '
+            until docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} ps --format json | \
+              grep -q "running"; do
+              sleep 2
+            done
+          '
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -f http://localhost:${{ inputs.port }}/ || \
+            (docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} logs --tail=50 && exit 1)
+
+      - name: Cleanup old images
+        run: |
+          docker image prune -f
