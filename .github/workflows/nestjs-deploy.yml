@@ -38,8 +38,8 @@ on:
         required: true
         type: string
     secrets:
-      ENV_FILE:
-        description: 'Contents of the .env file for the target environment'
+      POSTGRES_PASSWORD:
+        description: 'PostgreSQL password'
         required: true
 
 jobs:
@@ -66,8 +66,16 @@ jobs:
 
       - name: Write .env file
         run: |
-          echo '${{ secrets.ENV_FILE }}' > ${{ inputs.deploy-dir }}/.env
-          grep -q '^APP_ENV=' ${{ inputs.deploy-dir }}/.env || echo 'APP_ENV=${{ inputs.environment }}' >> ${{ inputs.deploy-dir }}/.env
+          cat > ${{ inputs.deploy-dir }}/.env << EOF
+          APP_ENV=${{ inputs.environment }}
+          BACKEND_PORT=${{ inputs.port }}
+          POSTGRES_USER=${{ vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB=${{ vars.POSTGRES_DB }}
+          POSTGRES_PORT=${{ vars.POSTGRES_PORT }}
+          ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
+          EOF
+          sed -i 's/^[[:space:]]*//' ${{ inputs.deploy-dir }}/.env
 
       - name: Build and deploy containers
         working-directory: ${{ inputs.deploy-dir }}
