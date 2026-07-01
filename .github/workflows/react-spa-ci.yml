@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -43,11 +45,17 @@ jobs:
 
       - name: Configure GitHub git dependency access
         env:
-          GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN || github.token }}
+          GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN }}
         run: |
+          if [[ -z "${GH_READ_TOKEN}" ]]; then
+            echo "::error::GH_READ_TOKEN is required to install private GitHub dependencies."
+            exit 1
+          fi
+          git config --global --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
           git config --global --add url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
           git config --global --add url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git ls-remote https://github.com/Lybo-Labs/lybo-ds-react.git HEAD >/dev/null
 
       - name: Install dependencies
         run: npm ci
