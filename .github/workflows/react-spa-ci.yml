@@ -1,0 +1,56 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: React SPA CI
+# ──────────────────────────────────────────────────────────────────────────────
+# Lives in: Lybo-Labs/cicd/.github/workflows/react-spa-ci.yml
+#
+# Runs install + production build validation for Vite/React SPAs.
+# Caller repos invoke it with:
+#   uses: Lybo-Labs/cicd/.github/workflows/react-spa-ci.yml@main
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: React SPA CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '24'
+      build-command:
+        description: 'Build command to run'
+        required: false
+        type: string
+        default: 'npm run build'
+    secrets:
+      GH_READ_TOKEN:
+        description: 'Optional token for private GitHub git dependencies'
+        required: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Configure GitHub git dependency access
+        env:
+          GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN || github.token }}
+        run: |
+          git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global --add url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ${{ inputs.build-command }}

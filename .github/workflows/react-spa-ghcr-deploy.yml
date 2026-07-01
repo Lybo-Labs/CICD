@@ -1,0 +1,192 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: React SPA deploy (GHCR + Docker Compose)
+# ──────────────────────────────────────────────────────────────────────────────
+# Lives in: Lybo-Labs/cicd/.github/workflows/react-spa-ghcr-deploy.yml
+#
+# Strategy: Trunk-Based Development
+#   - PR to main → build validation (via react-spa-ci.yml)
+#   - Manual dispatch → build image, push to GHCR, deploy selected environment
+#   - Production requires a tag (validated by caller)
+#
+# Runtime strategy:
+#   - GitHub Actions builds and publishes the immutable image to GHCR.
+#   - The self-hosted runner only pulls the image and starts Docker Compose.
+#   - Compose/npm scripts create one isolated container/project per environment.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: React SPA GHCR Deploy
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: 'Application name (used for project/container naming)'
+        required: true
+        type: string
+      environment:
+        description: 'GitHub Environment (production | staging | development)'
+        required: true
+        type: string
+      deploy-dir:
+        description: 'Absolute path on the server where compose metadata is deployed'
+        required: true
+        type: string
+      image-name:
+        description: 'GHCR image name, for example ghcr.io/org/repo'
+        required: true
+        type: string
+      node-version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '24'
+      build-command:
+        description: 'Build command to run before building the image'
+        required: false
+        type: string
+        default: 'npm run build'
+      output-directory:
+        description: 'Static build output copied into the nginx image'
+        required: false
+        type: string
+        default: 'dist'
+    secrets:
+      GH_READ_TOKEN:
+        description: 'Optional token for private GitHub git dependencies'
+        required: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      deploy-tag: ${{ steps.tags.outputs.deploy-tag }}
+      image-ref: ${{ inputs.image-name }}:${{ steps.tags.outputs.deploy-tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Configure GitHub git dependency access
+        env:
+          GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN || github.token }}
+        run: |
+          git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global --add url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: ${{ inputs.build-command }}
+
+      - name: Resolve deploy tag
+        id: tags
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "deploy-tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy-tag=${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image-name }}
+          tags: |
+            type=raw,value=${{ steps.tags.outputs.deploy-tag }}
+            type=sha,prefix=sha-
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}
+            BUILD_OUTPUT=${{ inputs.output-directory }}
+          secrets: |
+            gh_read_token=${{ secrets.GH_READ_TOKEN || github.token }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: self-hosted
+    environment:
+      name: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p ${{ inputs.deploy-dir }}
+
+      - name: Sync compose metadata
+        run: |
+          rsync -a --delete \
+            --include 'docker-compose.yml' \
+            --include 'package.json' \
+            --exclude '*' \
+            ./ ${{ inputs.deploy-dir }}/
+
+      - name: Write .env file
+        shell: bash
+        run: |
+          cat > ${{ inputs.deploy-dir }}/.env << EOF
+          APP_ENV=${{ inputs.environment }}
+          COMPOSE_PROJECT_NAME=${{ inputs.app-name }}-${{ inputs.environment }}
+          IMAGE_NAME=${{ inputs.image-name }}
+          IMAGE_TAG=${{ needs.build-and-push.outputs.deploy-tag }}
+          VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}
+          EOF
+          sed -i 's/^[[:space:]]*//' ${{ inputs.deploy-dir }}/.env
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull and deploy container
+        working-directory: ${{ inputs.deploy-dir }}
+        run: npm run docker:deploy
+
+      - name: Health check
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          CONTAINER="${{ inputs.app-name }}-${{ inputs.environment }}"
+          timeout 60 bash -c '
+            until docker inspect --format="{{.State.Health.Status}}" "'"$CONTAINER"'" 2>/dev/null | grep -q "healthy"; do
+              sleep 2
+            done
+          '
+
+      - name: Cleanup old images
+        run: docker image prune -f
