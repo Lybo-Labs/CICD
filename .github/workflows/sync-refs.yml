@@ -21,6 +21,7 @@ jobs:
         repo:
           - LYBO-API-CRM
           - landing
+          - lybo-crm-react
           # Add more consumer repos here:
           # - another-repo
     steps:
