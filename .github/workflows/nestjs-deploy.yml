@@ -37,6 +37,11 @@ on:
         description: 'Absolute path on the server where the app is deployed'
         required: true
         type: string
+      runtime-env-vars:
+        description: 'Newline-separated GitHub vars to append to .env'
+        required: false
+        type: string
+        default: ''
     secrets:
       POSTGRES_PASSWORD:
         description: 'PostgreSQL password'
@@ -66,6 +71,9 @@ jobs:
 
       - name: Write .env file
         shell: bash
+        env:
+          GITHUB_VARS_JSON: ${{ toJson(vars) }}
+          RUNTIME_ENV_VARS: ${{ inputs.runtime-env-vars }}
         run: |
           # URL-encode the password for safe use in DATABASE_URL
           ENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${{ secrets.POSTGRES_PASSWORD }}', safe=''))")
@@ -80,6 +88,19 @@ jobs:
           ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
           DATABASE_URL=postgresql://${{ vars.POSTGRES_USER }}:${ENCODED_PASS}@db:5432/${{ vars.POSTGRES_DB }}?schema=public
           EOF
+          python3 << 'PY' >> ${{ inputs.deploy-dir }}/.env
+          import json
+          import os
+
+          github_vars = json.loads(os.environ['GITHUB_VARS_JSON'])
+          runtime_env_vars = os.environ.get('RUNTIME_ENV_VARS', '').splitlines()
+
+          for name in runtime_env_vars:
+              name = name.strip()
+              if not name or name.startswith('#'):
+                  continue
+              print(f'{name}={github_vars.get(name, "")}')
+          PY
           sed -i 's/^[[:space:]]*//' ${{ inputs.deploy-dir }}/.env
 
       - name: Build and deploy containers
