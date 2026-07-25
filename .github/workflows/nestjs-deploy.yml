@@ -11,6 +11,18 @@
 # Deploys using Docker Compose on a self-hosted runner (lybo-onpremise).
 # The app is then exposed via Nginx Proxy Manager.
 #
+# Backups: right before every migration, the `db` service is dumped
+# (pg_dump | gzip) to <deploy-dir>/backups/ on the same host. This is a
+# local-only stopgap — it protects against a bad migration, but NOT against
+# loss of the host/disk itself. Shipping these dumps to offsite storage
+# (S3/R2/B2) is a follow-up, not yet wired here.
+#
+# Migrations run as an explicit, logged step (`prisma migrate deploy`)
+# between the backup and bringing the app up — not silently inside the
+# container's CMD — so a bad migration shows up in the deploy log right
+# next to the backup that was taken for it, instead of being buried in
+# container boot output.
+#
 # Caller repos invoke it with:
 #   uses: Lybo-Labs/cicd/.github/workflows/nestjs-deploy.yml@main
 # ──────────────────────────────────────────────────────────────────────────────
@@ -42,6 +54,11 @@ on:
         required: false
         type: string
         default: ''
+      backup-retention:
+        description: 'Number of local backups to keep per app+environment'
+        required: false
+        type: string
+        default: '14'
     secrets:
       POSTGRES_PASSWORD:
         description: 'PostgreSQL password'
@@ -59,6 +76,7 @@ jobs:
       - name: Prepare deploy directory
         run: |
           mkdir -p ${{ inputs.deploy-dir }}
+          mkdir -p ${{ inputs.deploy-dir }}/backups
 
       - name: Sync project files
         run: |
@@ -66,6 +84,7 @@ jobs:
             --exclude '.git' \
             --exclude 'node_modules' \
             --exclude 'postgres-data' \
+            --exclude 'backups' \
             --exclude '.env' \
             ./ ${{ inputs.deploy-dir }}/
 
@@ -103,11 +122,65 @@ jobs:
           PY
           sed -i 's/^[[:space:]]*//' ${{ inputs.deploy-dir }}/.env
 
-      - name: Build and deploy containers
+      - name: Stop existing containers
         working-directory: ${{ inputs.deploy-dir }}
         run: |
           docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} down --remove-orphans || true
-          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} up -d --build
+
+      - name: Start database
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} up -d db
+
+      - name: Wait for database to be healthy
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          echo "Waiting for db to be healthy..."
+          timeout 60 bash -c '
+            until docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} exec -T db \
+              pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" > /dev/null 2>&1; do
+              sleep 2
+            done
+          '
+        env:
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+
+      - name: Backup database before migrating
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          PREFIX="${{ inputs.app-name }}-${{ inputs.environment }}"
+          FILE="backups/${PREFIX}-${STAMP}.sql.gz"
+
+          docker compose -p "$PREFIX" exec -T db \
+            pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" | gzip > "$FILE"
+          echo "✅ Backup written to $FILE ($(du -h "$FILE" | cut -f1))"
+
+          # Local-only retention: keep the last N dumps for this app+environment.
+          # Not a substitute for offsite storage — just keeps the host disk bounded.
+          ls -1t "backups/${PREFIX}"-*.sql.gz 2>/dev/null \
+            | tail -n +$(( ${{ inputs.backup-retention }} + 1 )) \
+            | xargs -r rm -v --
+        env:
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+
+      - name: Build backend image
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} build backend
+
+      - name: Run database migrations
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} run --rm backend \
+            npx prisma migrate deploy
+
+      - name: Deploy containers
+        working-directory: ${{ inputs.deploy-dir }}
+        run: |
+          docker compose -p ${{ inputs.app-name }}-${{ inputs.environment }} up -d
 
       - name: Wait for healthy containers
         working-directory: ${{ inputs.deploy-dir }}

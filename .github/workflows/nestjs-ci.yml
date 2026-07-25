@@ -6,6 +6,13 @@
 # Runs lint, unit tests, and build validation.
 # Used by PRs and as a gate before deploys.
 #
+# Also flags potentially destructive Prisma migrations (DROP TABLE/COLUMN,
+# TRUNCATE, incompatible ALTER COLUMN) added in the PR. These aren't blocked
+# outright — some are genuinely intentional — but they require the PR to
+# carry the `migration:reviewed` label as an explicit acknowledgment that
+# someone looked at the blast radius (and, for prod-bound changes, that a
+# backup plan exists) before merging.
+#
 # Caller repos invoke it with:
 #   uses: Lybo-Labs/cicd/.github/workflows/nestjs-ci.yml@main
 # ──────────────────────────────────────────────────────────────────────────────
@@ -27,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -48,3 +57,47 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Detect destructive Prisma migrations
+        id: destructive-check
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ ! -d prisma/migrations ]; then
+            echo "No prisma/migrations directory, skipping."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          NEW_FILES=$(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA" -- 'prisma/migrations/**/migration.sql' || true)
+
+          if [ -z "$NEW_FILES" ]; then
+            echo "No new migration files in this PR."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATTERN='DROP TABLE|DROP COLUMN|DROP CONSTRAINT|ALTER COLUMN .* TYPE|TRUNCATE'
+          FOUND=false
+
+          while IFS= read -r file; do
+            MATCHES=$(grep -inE "$PATTERN" "$file" || true)
+            if [ -n "$MATCHES" ]; then
+              FOUND=true
+              echo "::warning file=$file::Potentially destructive migration — review the blast radius and confirm a backup was taken before this runs in production."
+              while IFS= read -r line; do
+                echo "  $file: $line"
+              done <<< "$MATCHES"
+            fi
+          done <<< "$NEW_FILES"
+
+          echo "found=$FOUND" >> "$GITHUB_OUTPUT"
+
+      - name: Require review label for destructive migrations
+        if: >-
+          steps.destructive-check.outputs.found == 'true' &&
+          !contains(github.event.pull_request.labels.*.name, 'migration:reviewed')
+        run: |
+          echo "::error::This PR adds a potentially destructive migration (DROP TABLE/COLUMN/CONSTRAINT, incompatible ALTER COLUMN, or TRUNCATE). Add the 'migration:reviewed' label once you've confirmed this is intentional and, for prod-bound changes, that a backup/rollback plan exists."
+          exit 1
