@@ -7,6 +7,9 @@
 
 name: Sync workflow refs
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
