@@ -25,6 +25,17 @@
 #
 # Caller repos invoke it with:
 #   uses: Lybo-Labs/cicd/.github/workflows/nestjs-deploy.yml@main
+#
+# Secrets beyond POSTGRES_PASSWORD (e.g. an SMTP password): the caller job
+# adds `secrets: inherit` and lists the secret's name in
+# `runtime-secret-vars` (same shape as `runtime-env-vars`, but sourced from
+# the caller's `secrets` context instead of `vars`) — no per-secret input
+# needs to be added here for that to work; `secrets: inherit` is what makes
+# the caller's full secrets context (repo + the target Environment's own
+# secrets) visible to this workflow, keyed by name, without ever printing a
+# value into workflow logs. POSTGRES_PASSWORD stays its own explicit,
+# required input — it's used by every caller today, so it's worth keeping
+# self-documenting rather than folding it into the generic list.
 # ──────────────────────────────────────────────────────────────────────────────
 
 name: NestJS Deploy
@@ -51,6 +62,15 @@ on:
         type: string
       runtime-env-vars:
         description: 'Newline-separated GitHub vars to append to .env'
+        required: false
+        type: string
+        default: ''
+      runtime-secret-vars:
+        description: >-
+          Newline-separated GitHub secret names to append to .env. Values
+          come from the caller's secrets context — the caller must invoke
+          this workflow with `secrets: inherit` for these to resolve to
+          anything but an empty string.
         required: false
         type: string
         default: ''
@@ -93,6 +113,7 @@ jobs:
         env:
           GITHUB_VARS_JSON: ${{ toJson(vars) }}
           RUNTIME_ENV_VARS: ${{ inputs.runtime-env-vars }}
+          RUNTIME_SECRET_VARS: ${{ inputs.runtime-secret-vars }}
         run: |
           # URL-encode the password for safe use in DATABASE_URL
           ENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${{ secrets.POSTGRES_PASSWORD }}', safe=''))")
