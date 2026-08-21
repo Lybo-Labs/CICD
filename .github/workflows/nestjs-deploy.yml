@@ -112,7 +112,6 @@ jobs:
         shell: bash
         env:
           GITHUB_VARS_JSON: ${{ toJson(vars) }}
-          GITHUB_SECRETS_JSON: ${{ toJson(secrets) }}
           RUNTIME_ENV_VARS: ${{ inputs.runtime-env-vars }}
           RUNTIME_SECRET_VARS: ${{ inputs.runtime-secret-vars }}
         run: |
@@ -134,25 +133,13 @@ jobs:
           import os
 
           github_vars = json.loads(os.environ['GITHUB_VARS_JSON'])
-          github_secrets = json.loads(os.environ['GITHUB_SECRETS_JSON'])
           runtime_env_vars = os.environ.get('RUNTIME_ENV_VARS', '').splitlines()
-          runtime_secret_vars = os.environ.get('RUNTIME_SECRET_VARS', '').splitlines()
 
           for name in runtime_env_vars:
               name = name.strip()
               if not name or name.startswith('#'):
                   continue
               print(f'{name}={github_vars.get(name, "")}')
-
-          # Same shape as the loop above, but sourced from `secrets` (only
-          # populated if the caller used `secrets: inherit`) — masked by
-          # GitHub Actions' own log redaction like any other secret value,
-          # since it's read from the `secrets` context.
-          for name in runtime_secret_vars:
-              name = name.strip()
-              if not name or name.startswith('#'):
-                  continue
-              print(f'{name}={github_secrets.get(name, "")}')
           PY
           sed -i 's/^[[:space:]]*//' ${{ inputs.deploy-dir }}/.env
 
