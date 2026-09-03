@@ -25,6 +25,7 @@ jobs:
           - LYBO-API-CRM
           - landing
           - lybo-crm-react
+          - medtech-catalog
           # Add more consumer repos here:
           # - another-repo
     steps:

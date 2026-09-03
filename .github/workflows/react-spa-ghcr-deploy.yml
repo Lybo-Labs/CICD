@@ -83,8 +83,8 @@ jobs:
           GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN }}
         run: |
           if [[ -z "${GH_READ_TOKEN}" ]]; then
-            echo "::error::GH_READ_TOKEN is required to install private GitHub dependencies."
-            exit 1
+            echo "No GH_READ_TOKEN provided, skipping (caller has no private GitHub git dependencies)."
+            exit 0
           fi
           git config --global --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
