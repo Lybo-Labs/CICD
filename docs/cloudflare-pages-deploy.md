@@ -131,24 +131,53 @@ En `festzone-landing` → **Settings**:
      (útil si `production` debe usar un token distinto/más restringido que
      `preview`). Si haces esto, quita los repository secrets equivalentes para
      evitar ambigüedad sobre cuál gana.
+3. **Variables** (`Settings → Secrets and variables → Actions → Variables`):
+   agrega una variable de repo `CF_PROJECT_NAME` con el nombre base del
+   proyecto en Cloudflare Pages (ej. `festzone`). Los workflows del paso 7 la
+   usan para derivar `${CF_PROJECT_NAME}` (production), `${CF_PROJECT_NAME}-staging`
+   y `${CF_PROJECT_NAME}-dev` — así el nombre del proyecto no queda hardcodeado
+   en los `.yml`, y los mismos tres archivos sirven sin cambios para cualquier
+   landing Astro nueva.
 
 ## 7. Agregar los workflows base al repo
 
 `festzone-landing` necesita tres workflows en `.github/workflows/`, además de un
-`.nvmrc` con la versión de Node (ya se agregaron a este repo como parte de esta
-tarea, tomando como base los de `odonto-maoli-landing`):
+`.nvmrc` con la versión de Node.
 
-- **`deploy.yml`** — corre en cada PR contra `main`, despliega a `festzone-dev`
-  como preview y comenta la URL en el PR.
+**Opción automática (recomendada):** en `cicd` → Actions →
+[`Scaffold Astro static deploy`](../.github/workflows/scaffold-astro-deploy.yml)
+→ Run workflow, con `repos: festzone-landing` (o varios separados por coma).
+Abre un PR en ese repo con los 4 archivos ya listos, tomados de
+[`templates/astro-static-deploy/`](../templates/astro-static-deploy/) con el SHA
+de `cicd` fijado. El PR trae un checklist con lo que falta configurar a mano
+(Environments, Secrets, `CF_PROJECT_NAME`).
+
+**Opción manual:** copiar los archivos de `templates/astro-static-deploy/` (o de
+otro repo que ya siga este patrón, ej. `odonto-maoli-landing`), quitándoles el
+sufijo `.tpl` (`deploy.yml.tpl` → `deploy.yml`, `nvmrc.tpl` → `.nvmrc`, etc. —
+ese sufijo es a propósito, para que las plantillas no vivan como `.yml` sueltos
+fuera de `.github/workflows/`) y reemplazando el placeholder `__CICD_SHA__` por
+el SHA actual de `main` en `cicd`.
+
+- **`deploy.yml`** — corre en cada PR contra `main`, despliega a
+  `${CF_PROJECT_NAME}-dev` como preview y comenta la URL en el PR.
 - **`deploy-manual.yml`** — `workflow_dispatch` con choice `development | staging
   | production`; producción exige que el trigger sea un tag (`refs/tags/*`).
-- **`release.yml`** — `release-please` sobre `main`, genera el PR de versión y
-  el tag que dispara el deploy a producción.
+- **`release.yml`** — llama al workflow reusable `release.yml` de este repo
+  (`release-please` sobre `main`), genera el PR de versión y el tag que dispara
+  el deploy a producción.
 
-Los tres solo referencian el workflow reusable de este repo
-(`Lybo-Labs/cicd/.github/workflows/cloudflare-pages-deploy.yml@<sha>`), fijado a
-un commit SHA específico, no a `@main` — esto evita que un cambio en `cicd` rompa
-el deploy de un repo consumidor sin aviso. Ver [mantenimiento](#mantenimiento-del-pin-de-sha).
+Los tres solo referencian workflows reusables de este repo
+(`Lybo-Labs/cicd/.github/workflows/<workflow>.yml@<sha>`), fijados a un commit
+SHA específico, no a `@main` — esto evita que un cambio en `cicd` rompa el
+deploy de un repo consumidor sin aviso. Ver [mantenimiento](#mantenimiento-del-pin-de-sha).
+
+> Nota: `festzone-landing`, `landing`, `montcorbier-web` y `odonto-maoli-landing`
+> se crearon antes de esta convención y todavía tienen el nombre de proyecto
+> hardcodeado en `deploy.yml`/`deploy-manual.yml` en vez de `CF_PROJECT_NAME`.
+> Migrarlos es opcional (basta con correr el scaffold sobre ellos una vez que
+> tengan la variable configurada); los repos nuevos deberían usar siempre la
+> variable.
 
 ## 8. Verificar el flujo completo
 
