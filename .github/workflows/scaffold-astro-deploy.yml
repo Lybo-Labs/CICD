@@ -1,0 +1,155 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Scaffold: abre PRs con los workflows de deploy para proyectos Astro estáticos
+# ──────────────────────────────────────────────────────────────────────────────
+# Corre manualmente (Actions → "Scaffold Astro static deploy" → Run workflow),
+# indicando uno o más repos de la org Lybo-Labs. Por cada repo abre un PR
+# agregando deploy.yml / deploy-manual.yml / release.yml / .nvmrc, tomados de
+# templates/astro-static-deploy/*.tpl con el SHA de este commit ya fijado.
+# Las plantillas usan extensión .tpl (no .yml) a propósito: viven fuera de
+# .github/workflows/ y GitHub jamás las detecta como workflows del propio
+# repo cicd, pero el sufijo lo deja explícito además.
+#
+# Los tres workflows son idénticos entre repos: el nombre del proyecto de
+# Cloudflare Pages no se hardcodea, se resuelve en runtime desde la variable
+# de repo CF_PROJECT_NAME (ver docs/cloudflare-pages-deploy.md).
+#
+# Re-correrlo sobre un repo ya scaffoldeado actualiza la misma rama/PR
+# (útil si se corrigen las plantillas), pero también sobrescribe cualquier
+# personalización manual que ese repo le haya hecho a estos 4 archivos.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Scaffold Astro static deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'Repos (sin owner) donde abrir el PR, separados por coma. Ej: velumra-landing,otra-landing'
+        required: true
+        type: string
+      node-version:
+        description: 'Versión de Node para .nvmrc'
+        required: false
+        type: string
+        default: '22'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.parse.outputs.repos }}
+    steps:
+      - name: Parse repo list
+        id: parse
+        run: |
+          REPOS_JSON=$(printf '%s' "${{ inputs.repos }}" \
+            | tr ',' '\n' \
+            | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "repos=$REPOS_JSON" >> "$GITHUB_OUTPUT"
+
+  scaffold:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: ${{ fromJSON(needs.prepare.outputs.repos) }}
+    steps:
+      - name: Checkout cicd (templates)
+        uses: actions/checkout@v4
+
+      - name: Generate token for ${{ matrix.repo }}
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CICD_APP_ID }}
+          private-key: ${{ secrets.CICD_APP_PRIVATE_KEY }}
+          owner: Lybo-Labs
+          repositories: ${{ matrix.repo }}
+
+      - name: Checkout ${{ matrix.repo }}
+        uses: actions/checkout@v4
+        with:
+          repository: Lybo-Labs/${{ matrix.repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: target-repo
+
+      - name: Copy Astro static deploy files
+        env:
+          CICD_SHA: ${{ github.sha }}
+          NODE_VERSION: ${{ inputs.node-version }}
+        run: |
+          mkdir -p target-repo/.github/workflows
+
+          for f in deploy.yml deploy-manual.yml release.yml; do
+            sed "s/__CICD_SHA__/${CICD_SHA}/g" \
+              "templates/astro-static-deploy/${f}.tpl" \
+              > "target-repo/.github/workflows/${f}"
+          done
+
+          sed "s/__NODE_VERSION__/${NODE_VERSION}/g" \
+            "templates/astro-static-deploy/nvmrc.tpl" \
+            > "target-repo/.nvmrc"
+
+      - name: Create or update PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        working-directory: target-repo
+        run: |
+          git add .github/workflows/deploy.yml .github/workflows/deploy-manual.yml .github/workflows/release.yml .nvmrc
+
+          if git diff --cached --quiet; then
+            echo "Sin cambios para ${{ matrix.repo }}, se omite PR"
+            exit 0
+          fi
+
+          BRANCH="chore/add-astro-static-deploy"
+          git checkout -b "$BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(ci): add Astro static deploy workflows"
+          git push origin "$BRANCH" --force
+
+          if gh pr view "$BRANCH" --json number -q .number >/dev/null 2>&1; then
+            echo "PR ya existe para $BRANCH en ${{ matrix.repo }}, se actualizó la rama"
+            exit 0
+          fi
+
+          gh pr create \
+            --title "chore(ci): add Astro static deploy workflows" \
+            --body "$(cat <<EOF
+          Agrega los workflows base para desplegar este proyecto Astro a Cloudflare
+          Pages usando los reusables de [cicd](https://github.com/Lybo-Labs/cicd):
+
+          - \`deploy.yml\` — preview en cada PR contra \`main\`.
+          - \`deploy-manual.yml\` — deploy manual a development/staging/production.
+          - \`release.yml\` — versión y tag vía release-please.
+          - \`.nvmrc\` (Node ${{ inputs.node-version }}).
+
+          El nombre de proyecto en Cloudflare Pages **no** está hardcodeado en estos
+          archivos: se resuelve en runtime desde la variable de repo \`CF_PROJECT_NAME\`.
+
+          **Antes de mergear, configurar en Settings de este repo:**
+
+          - [ ] Environments \`preview\`, \`development\`, \`staging\`, \`production\`
+                (con Required reviewers en \`production\`).
+          - [ ] Secrets \`CLOUDFLARE_API_TOKEN\` y \`CLOUDFLARE_ACCOUNT_ID\`.
+          - [ ] Variable de repo \`CF_PROJECT_NAME\` = nombre base del proyecto en
+                Cloudflare Pages (ej. \`festzone\`). De ahí se derivan
+                \`\${CF_PROJECT_NAME}\`, \`\${CF_PROJECT_NAME}-staging\` y
+                \`\${CF_PROJECT_NAME}-dev\`.
+          - [ ] Los 3 proyectos correspondientes ya creados en Cloudflare Pages.
+
+          Ver la guía completa en
+          [docs/cloudflare-pages-deploy.md](https://github.com/Lybo-Labs/cicd/blob/main/docs/cloudflare-pages-deploy.md).
+
+          Generado automáticamente por
+          [scaffold-astro-deploy.yml](https://github.com/Lybo-Labs/cicd/actions/workflows/scaffold-astro-deploy.yml).
+          EOF
+          )" \
+            --base main \
+            --head "$BRANCH"
